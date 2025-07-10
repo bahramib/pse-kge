@@ -1,0 +1,8 @@
+tensorflow-gpu==1.13.1
+numpy
+scikit-learn
+tqdm
+# Note: libkge needs to be installed from the repository:
+# git clone https://github.com/samehkamaleldin/libkge.git
+# cd libkge
+# python setup.py install 

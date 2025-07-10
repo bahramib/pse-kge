@@ -22,70 +22,45 @@ parser.add_argument("-c", "--cut", action="store_true")
 parser.add_argument("-o", "--original", action="store_true")
 args = parser.parse_args()
 
-
 def main():
     seed = 1234
+    nb_epochs_then_check = None
     data_name = "pse"
     kg_dp_path = "../data/"
+    ddis_only_path = "../../Converters/step_train_data_only/"
     input_data_path = "../../Converters/step_two_completed_train_only"
-    if args.rule == "N3_long":
-        input_data_file = "N3_long_filtered_extra_on_KG_cut.txt"
-    elif args.rule is None:
-        input_data_file = "E_extra_on_KG_cut.txt"
-    else:
-        input_data_file = f"{args.rule}_on_{args.dataset}.txt"
-
-    if args.rule == "N3_long":
-        data_used = "KG_cut"
-    elif args.rule is None:
-        data_used = "KG_cut"
-    else:
-        data_used = "DDI_Trivec" if "decagon" not in args.dataset else "DDI_decagon"
+    input_data_file = f"{args.rule}{'_filtered' if args.filtered else ''}{'_extra' if args.extra else ''}_on_{args.dataset}.txt"
+    data_used = "KG_whole"
     data_type = "completed"
-    completed_by = args.rule if args.rule is not None else "extra"
-    
+    completed_by = args.rule
+    filter = "filtered" if args.filtered else "unfiltered"
+    extra = "with_extra" if args.extra else "no_extra"
 
-
+    np.random.seed(seed)
 
     se_map_raw = [l.strip().split("\t") for l in open(os.path.join(kg_dp_path, "se_maps.txt")).readlines()]
     se_mapping = {k: v for k, v in se_map_raw} # SE code: SE  real name
 
     print("Importing dataset files ... ")
+    benchmark_train_fd = open(os.path.join(ddis_only_path, "DDI_decagon.txt"), "rt") 
     if args.original:
-        benchmark_train_fd = open("../../Converters/step_train_data_only/DDI.txt", "rt") # original used by Trivec paper
+        benchmark_train_full_fd = open("../../Converters/step_train_data_only/KG_whole.txt", "rt") # original Decagon KG
     else:
-        benchmark_train_fd = open(os.path.join(input_data_path, input_data_file), "rt") # original TriVec DDIs only 
+        benchmark_train_full_fd = open(os.path.join(input_data_path, input_data_file), "rt") # whole KG
     benchmark_valid_fd = open(os.path.join(kg_dp_path, "DDI_valid.txt"), "rt")
     benchmark_test_fd = open(os.path.join(kg_dp_path, "DDI_test.txt"), "rt")
-
+    
     
     benchmark_train = np.array([l.strip().split() for l in benchmark_train_fd.readlines()]) # [drug1, se, drug2]
+    benchmark_train_full = np.array([l.strip().split() for l in benchmark_train_full_fd.readlines()]) # whole KG
     benchmark_valid = np.array([l.strip().split() for l in benchmark_valid_fd.readlines()])
     benchmark_test = np.array([l.strip().split() for l in benchmark_test_fd.readlines()])
 
     benchmark_triples = np.array([[d1, se, d2] for d1, se, d2 in
-                                  np.concatenate([benchmark_train, benchmark_valid, benchmark_test])]) # whole DDI.txt
+                                  np.concatenate([benchmark_train, benchmark_valid, benchmark_test])]) # whole DDI.txt (only DDI)
 
-    pse_drugs = list(set(list(np.concatenate([benchmark_triples[:, 0], benchmark_triples[:, 2]])))) # all unique drugs
-    pse_list = set(list(benchmark_triples[:, 1])) # all unique side effects
-
-    rel_dict = dict() # this one isn't used
-    for s, p, o in benchmark_triples:
-        if p not in rel_dict:
-            rel_dict[p] = 1
-        else:
-            rel_dict[p] += 1
-
-    pair_dict = dict() # this one isn't used
-    for s, p, o in benchmark_triples:
-        if s > o:
-            pair = (s, o)
-        else:
-            pair = (o, s)
-        if pair not in rel_dict:
-            pair_dict[pair] = 1
-        else:
-            pair_dict[pair] += 1
+    pse_drugs = list(set(list(np.concatenate([benchmark_triples[:, 0], benchmark_triples[:, 2]])))) # all unique drugs (only drugs)
+    pse_list = set(list(benchmark_triples[:, 1])) # all unique side effects (only between different drugs)
 
     drug_combinations = np.array([[d1, d2] for d1, d2 in list(itertools.product(pse_drugs, pse_drugs)) if d1 != d2]) # array of cartesian product of all drug pairs \{a,a}
 
@@ -93,11 +68,11 @@ def main():
     # delete raw polypharmacy data
     del benchmark_triples
     dataset = KgDataset(name=data_name)
-    dataset.load_triples(benchmark_train, tag="bench_train")
+    dataset.load_triples(benchmark_train_full, tag="bench_train")
     dataset.load_triples(benchmark_valid, tag="bench_valid")
     dataset.load_triples(benchmark_test, tag="bench_test")
 
-    del benchmark_train
+    del benchmark_train_full
     del benchmark_valid
     del benchmark_test
 
@@ -121,7 +96,8 @@ def main():
     se_facts_full_dict = {se: set() for se in pse_indices} # empty set for all side effect index
 
     for s, p, o in bench_idx_data:
-        se_facts_full_dict[p].add((s, p, o)) # se_i index: (drug1, se_i, drug2)
+        if s != o and p in pse_indices:  # check if relation index is a side effect index
+            se_facts_full_dict[p].add((s, p, o)) # se_i index: (drug1, se_i, drug2)
 
     print("Initializing the knowledge graph embedding model... ")
     # model pipeline definition
@@ -217,15 +193,11 @@ def main():
     if args.original:
         with open("../../Analysis/incomplete_with_proper_parameters.txt", 'a') as ff:
             ff.write(f"{se_ap_list_avg:.4f}\t{se_auc_roc_list_avg:.4f}\t{se_auc_pr_list_avg:.4f}\t{se_p50_list_avg:.4f}\t{data_used}\t{data_type}\t")
-            ff.write("DDI\toriginal\n")
+            ff.write("KG_whole\toriginal\n")
     else:
         with open(f"../results/step_two_results.txt", "a") as ff:
             ff.write(f"{se_ap_list_avg:.4f}\t{se_auc_roc_list_avg:.4f}\t{se_auc_pr_list_avg:.4f}\t{se_p50_list_avg:.4f}\t{data_used}\t{data_type}\t")
-            filtered_str = 'filtered' if args.filtered else 'unfiltered'
-            extra_str = 'with_extra' if args.extra else 'no_extra'
-            cut_str = '\tcut' if args.cut else ''
-            ff.write(f"{completed_by}\t{filtered_str}\t{extra_str}{cut_str}\n")
-
+            ff.write(f"{completed_by}\t{filter}\t{extra}\n")
 
 if __name__ == '__main__':
     main()

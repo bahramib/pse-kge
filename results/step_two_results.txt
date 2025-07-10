@@ -1,0 +1,1 @@
+0.9573	0.9739	0.9573	0.9599	DDI_Trivec	completed	N1_short	unfiltered	no_extra
